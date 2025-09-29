@@ -13,6 +13,8 @@
 
 - 사각형 rotate, fall 작업: https://github.com/yoohaso/tanghulu/pull/1
 - 파란 사각형 여러개 반복 생성 작업: https://github.com/yoohaso/tanghulu/pull/2
+  - 풀링 방식으로 변경 (9/29): https://github.com/yoohaso/tanghulu/pull/2#issuecomment-3345540636
+  - y 좌표 랜덤 생성 (9/29): https://github.com/yoohaso/tanghulu/pull/2#issuecomment-3345550203
 
 #### 생각나는 아이디어 정리
 
