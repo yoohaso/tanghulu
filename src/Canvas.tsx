@@ -30,6 +30,10 @@ function poissonDisk1D(viewportWidth: number, rectWidth: number, margin: number)
   return points;
 }
 
+function getRandomYAboveViewport() {
+  return -Math.random() * 1000;
+}
+
 function Canvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rAFref = useRef<number | null>(null);
@@ -42,7 +46,7 @@ function Canvas() {
     pool.push(rect.x);
     rect.x = pool[idx];
     pool.splice(idx, 1);
-    rect.y = 0;
+    rect.y = getRandomYAboveViewport();
   };
 
   const initAvailableX = (canvasWidth: number) => {
@@ -54,7 +58,14 @@ function Canvas() {
   const createRectangleObjects = useCallback((canvasWidth: number) => {
     const initX = initAvailableX(canvasWidth);
     blueRectRef.current = initX.map(
-      x => new Rectangle(x, 0, RECTANGLE_SIZE.width, RECTANGLE_SIZE.height, 'blue'),
+      x =>
+        new Rectangle(
+          x,
+          getRandomYAboveViewport(),
+          RECTANGLE_SIZE.width,
+          RECTANGLE_SIZE.height,
+          'blue',
+        ),
     );
   }, []);
 
