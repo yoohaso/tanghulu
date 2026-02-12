@@ -1,10 +1,53 @@
 import { useCallback, useEffect, useRef } from 'react';
-import Rectangle from './model/Rectangle';
+import Fruit from './model/Fruit';
+import Skewer from './model/Skewer';
+import blueberryUrl from './assets/blueberry.png';
+import strawberryUrl from './assets/strawberry.png';
 
-const RECTANGLE_SIZE = {
-  width: 50,
-  height: 50,
-};
+interface FruitConfig {
+  url: string;
+  size: number;
+}
+
+const FRUITS: FruitConfig[] = [
+  { url: blueberryUrl, size: 50 },
+  { url: strawberryUrl, size: 80 },
+];
+
+const MAX_FRUIT_SIZE = Math.max(...FRUITS.map(f => f.size));
+
+const COLLISION_X_THRESHOLD = 30;
+
+interface LoadedFruit {
+  image: HTMLImageElement;
+  width: number;
+  height: number;
+}
+
+function loadFruits(fruits: FruitConfig[]): Promise<LoadedFruit[]> {
+  return Promise.all(
+    fruits.map(
+      fruit =>
+        new Promise<LoadedFruit>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            const aspect = img.naturalWidth / img.naturalHeight;
+            resolve({
+              image: img,
+              width: fruit.size * aspect,
+              height: fruit.size,
+            });
+          };
+          img.onerror = reject;
+          img.src = fruit.url;
+        }),
+    ),
+  );
+}
+
+function pickRandom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
 // NOTE: https://www.cemyuksel.com/cyCodeBase/soln/poisson_disk_sampling.html
 function poissonDisk1D(viewportWidth: number, rectWidth: number, margin: number) {
@@ -37,75 +80,136 @@ function getRandomYAboveViewport() {
 function Canvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rAFref = useRef<number | null>(null);
-  const blueRectRef = useRef<Rectangle[]>([]);
+  const fruitsRef = useRef<Fruit[]>([]);
   const availableXRef = useRef<number[]>([]);
+  const loadedFruitsRef = useRef<LoadedFruit[]>([]);
+  const skewerRef = useRef<Skewer | null>(null);
+  const mouseXRef = useRef<number>(0);
 
-  const recycleRectangle = (rect: Rectangle) => {
+  const recycleFruit = (fruit: Fruit) => {
     const pool = availableXRef.current;
     const idx = Math.floor(Math.random() * pool.length);
-    pool.push(rect.x);
-    rect.x = pool[idx];
+    pool.push(fruit.x);
+    fruit.x = pool[idx];
     pool.splice(idx, 1);
-    rect.y = getRandomYAboveViewport();
+    fruit.y = getRandomYAboveViewport();
+    fruit.angle = 0;
+    fruit.rotateDirection = Math.random() > 0.5 ? 1 : -1;
+    const loaded = pickRandom(loadedFruitsRef.current);
+    fruit.image = loaded.image;
+    fruit.width = loaded.width;
+    fruit.height = loaded.height;
+    fruit.skewered = false;
   };
 
   const initAvailableX = (canvasWidth: number) => {
-    const initX = poissonDisk1D(canvasWidth, RECTANGLE_SIZE.width, 20);
+    const initX = poissonDisk1D(canvasWidth, MAX_FRUIT_SIZE, 20);
     availableXRef.current = [...initX];
     return initX;
   };
 
-  const createRectangleObjects = useCallback((canvasWidth: number) => {
+  const createFruitObjects = useCallback((canvasWidth: number, loaded: LoadedFruit[]) => {
     const initX = initAvailableX(canvasWidth);
-    blueRectRef.current = initX.map(
-      x =>
-        new Rectangle(
-          x,
-          getRandomYAboveViewport(),
-          RECTANGLE_SIZE.width,
-          RECTANGLE_SIZE.height,
-          'blue',
-        ),
-    );
+    fruitsRef.current = initX.map(x => {
+      const fruit = pickRandom(loaded);
+      return new Fruit(x, getRandomYAboveViewport(), fruit.width, fruit.height, fruit.image);
+    });
   }, []);
 
-  const drawRectangle = useCallback((ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    blueRectRef.current.forEach(rect => {
-      rect.animate(ctx, 0.1, 2);
+  const checkCollision = (fruit: Fruit, skewer: Skewer): boolean => {
+    if (fruit.skewered) return false;
 
-      if (rect.y >= canvas.height) {
-        recycleRectangle(rect);
+    const dx = Math.abs(fruit.x - skewer.x);
+    if (dx > COLLISION_X_THRESHOLD) return false;
+
+    const fruitBottom = fruit.y + fruit.height / 2;
+    // 과일 하단이 꼬치 끝 근처를 지나는 순간에만 충돌 (위에서 아래로 통과하는 짧은 구간)
+    return fruitBottom >= skewer.tipY && fruitBottom <= skewer.tipY + 20;
+  };
+
+  const gameLoop = useCallback((ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const skewer = skewerRef.current;
+    if (!skewer) return;
+
+    // Smoothly follow mouse X
+    const targetX = mouseXRef.current;
+    skewer.x += (targetX - skewer.x) * 0.12;
+    skewer.updateFruitPositions();
+
+    // Draw falling fruits (not skewered)
+    fruitsRef.current.forEach(fruit => {
+      if (!fruit.skewered) {
+        fruit.animate(ctx, 0.03, 2);
+
+        // Check collision with skewer
+        if (checkCollision(fruit, skewer)) {
+          skewer.addFruit(fruit);
+        }
+
+        // Recycle fruits that fell off screen
+        if (fruit.y >= canvas.height + 100) {
+          recycleFruit(fruit);
+        }
       }
     });
 
-    window.requestAnimationFrame(() => drawRectangle(ctx, canvas));
+    // Draw skewer
+    skewer.draw(ctx);
+
+    // Draw skewered fruits (on top of skewer)
+    skewer.skeweredFruits.forEach(fruit => {
+      fruit.animate(ctx, 0, 0);
+    });
+
+    rAFref.current = window.requestAnimationFrame(() => gameLoop(ctx, canvas));
   }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (canvas) {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+    if (!canvas) return;
 
-      createRectangleObjects(canvas.width);
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
 
-      if (canvas.getContext('2d')) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          rAFref.current = window.requestAnimationFrame(() => {
-            drawRectangle(ctx, canvas);
-          });
-        }
+    // Initialize skewer at bottom center
+    skewerRef.current = new Skewer(canvas.width / 2, canvas.height - 30);
+    mouseXRef.current = canvas.width / 2;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      mouseXRef.current = e.clientX;
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length > 0) {
+        mouseXRef.current = e.touches[0].clientX;
       }
-    }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('touchmove', handleTouchMove);
+
+    loadFruits(FRUITS).then(loaded => {
+      loadedFruitsRef.current = loaded;
+      createFruitObjects(canvas.width, loaded);
+
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        rAFref.current = window.requestAnimationFrame(() => {
+          gameLoop(ctx, canvas);
+        });
+      }
+    });
 
     return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('touchmove', handleTouchMove);
       if (rAFref.current) {
         window.cancelAnimationFrame(rAFref.current);
       }
     };
-  }, [drawRectangle, createRectangleObjects]);
+  }, [gameLoop, createFruitObjects]);
 
   return <canvas ref={canvasRef}></canvas>;
 }
