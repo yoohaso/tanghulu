@@ -5,6 +5,7 @@ class Rectangle {
   height: number;
   color: string;
   angle: number;
+  rotateDirection: number;
 
   constructor(x: number, y: number, width: number, height: number, color: string) {
     this.x = x;
@@ -13,6 +14,7 @@ class Rectangle {
     this.height = height;
     this.color = color;
     this.angle = 0;
+    this.rotateDirection = Math.random() > 0.5 ? 1 : -1;
   }
 
   private draw(ctx: CanvasRenderingContext2D) {
@@ -30,7 +32,7 @@ class Rectangle {
 
     ctx.save();
     ctx.translate(this.x, this.y);
-    ctx.rotate(this.angle);
+    ctx.rotate(this.rotateDirection * this.angle);
     this.draw(ctx);
     ctx.restore();
   }
