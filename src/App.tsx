@@ -1,11 +1,7 @@
-import './App.css';
+import Canvas from './Canvas';
 
 function App() {
-  return (
-    <div className="App">
-      <h1>Tanghulu</h1>
-    </div>
-  );
+  return <Canvas />;
 }
 
 export default App;
