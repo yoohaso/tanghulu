@@ -100,6 +100,10 @@ function Canvas() {
     fruit.width = loaded.width;
     fruit.height = loaded.height;
     fruit.skewered = false;
+    fruit.bouncing = false;
+    fruit.vx = 0;
+    fruit.vy = 0;
+    fruit.angularVelocity = 0;
   };
 
   const initAvailableX = (canvasWidth: number) => {
@@ -138,20 +142,45 @@ function Canvas() {
     skewer.x += (targetX - skewer.x) * 0.12;
     skewer.updateFruitPositions();
 
-    // Draw falling fruits (not skewered)
+    // Draw falling & bouncing fruits (not skewered)
     fruitsRef.current.forEach(fruit => {
-      if (!fruit.skewered) {
-        fruit.animate(ctx, 0.03, 2);
+      if (fruit.skewered) return;
 
-        // Check collision with skewer
+      if (fruit.bouncing) {
+        fruit.animate(ctx, 0, 0);
+        // Recycle bouncing fruits that left the screen
+        if (fruit.y > canvas.height + 100 || fruit.x < -100 || fruit.x > canvas.width + 100) {
+          recycleFruit(fruit);
+        }
+        return;
+      }
+
+      // Normal falling fruit
+      fruit.animate(ctx, 0.03, 2);
+
+      if (skewer.isFull) {
+        // Skewer is full — bounce off stacked fruits
+        const fruitRadius = Math.max(fruit.width, fruit.height) / 2;
+        for (const stacked of skewer.skeweredFruits) {
+          const stackedRadius = Math.max(stacked.width, stacked.height) / 2;
+          const dx = fruit.x - stacked.x;
+          const dy = fruit.y - stacked.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < fruitRadius + stackedRadius - 10) {
+            fruit.bounce(stacked.x, stacked.y);
+            break;
+          }
+        }
+      } else {
+        // Check collision with skewer tip
         if (checkCollision(fruit, skewer)) {
           skewer.addFruit(fruit);
         }
+      }
 
-        // Recycle fruits that fell off screen
-        if (fruit.y >= canvas.height + 100) {
-          recycleFruit(fruit);
-        }
+      // Recycle fruits that fell off screen
+      if (fruit.y >= canvas.height + 100) {
+        recycleFruit(fruit);
       }
     });
 

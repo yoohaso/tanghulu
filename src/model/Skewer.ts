@@ -25,6 +25,21 @@ class Skewer {
     return this.y - 40;
   }
 
+  /** 현재 쌓인 과일 높이 합 */
+  private get stackedHeight(): number {
+    return this.skeweredFruits.reduce((sum, f) => sum + f.height * 0.7, 0);
+  }
+
+  /** 꼬치가 가득 찼는지 여부 */
+  get isFull(): boolean {
+    return this.stackBaseY - this.stackedHeight <= this.tipY + 20;
+  }
+
+  /** 스택 최상단 Y 좌표 */
+  get stackTopY(): number {
+    return this.stackBaseY - this.stackedHeight;
+  }
+
   draw(ctx: CanvasRenderingContext2D) {
     const tipY = this.y - this.height;
     const baseY = this.y;
