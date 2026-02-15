@@ -3,6 +3,7 @@ import Fruit from './model/Fruit';
 import Skewer from './model/Skewer';
 import blueberryUrl from './assets/blueberry.png';
 import strawberryUrl from './assets/strawberry.png';
+import pineappleUrl from './assets/pineapple.png';
 
 interface FruitConfig {
   url: string;
@@ -12,6 +13,7 @@ interface FruitConfig {
 const FRUITS: FruitConfig[] = [
   { url: blueberryUrl, size: 50 },
   { url: strawberryUrl, size: 80 },
+  { url: pineappleUrl, size: 90 },
 ];
 
 const MAX_FRUIT_SIZE = Math.max(...FRUITS.map(f => f.size));
@@ -53,7 +55,7 @@ function pickRandom<T>(arr: T[]): T {
 function poissonDisk1D(viewportWidth: number, rectWidth: number, margin: number) {
   const minSpace = rectWidth + margin;
   const maxXPointCount = Math.floor(viewportWidth / minSpace);
-  const targetXPointCount = Math.floor(Math.random() * (maxXPointCount + 1));
+  const targetXPointCount = maxXPointCount;
 
   const points: number[] = [];
   const MAX_ATTEMPTS = 1000;
@@ -174,7 +176,18 @@ function Canvas() {
       } else {
         // Check collision with skewer tip
         if (checkCollision(fruit, skewer)) {
+          const prevX = fruit.x;
           skewer.addFruit(fruit);
+          // Spawn a replacement fruit to maintain falling fruit count
+          const pool = availableXRef.current;
+          pool.push(prevX);
+          const idx = Math.floor(Math.random() * pool.length);
+          const newX = pool[idx];
+          pool.splice(idx, 1);
+          const loaded = pickRandom(loadedFruitsRef.current);
+          fruitsRef.current.push(
+            new Fruit(newX, getRandomYAboveViewport(), loaded.width, loaded.height, loaded.image),
+          );
         }
       }
 
