@@ -109,6 +109,24 @@ function Canvas() {
   const coatingFrozenXRef = useRef<number>(0);
   const sparklesRef = useRef<Sparkle[]>([]);
   const exitStartYRef = useRef<number>(0);
+  const logicalWidthRef = useRef<number>(window.innerWidth);
+  const logicalHeightRef = useRef<number>(window.innerHeight);
+
+  const resizeCanvas = (canvas: HTMLCanvasElement) => {
+    const dpr = window.devicePixelRatio || 1;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+
+    logicalWidthRef.current = w;
+    logicalHeightRef.current = h;
+
+    return dpr;
+  };
 
   const recycleFruit = (fruit: Fruit) => {
     const pool = availableXRef.current;
@@ -156,7 +174,8 @@ function Canvas() {
 
   const updateAndDrawFallingFruits = (
     ctx: CanvasRenderingContext2D,
-    canvas: HTMLCanvasElement,
+    logicalW: number,
+    logicalH: number,
     skewer: Skewer,
   ) => {
     fruitsRef.current.forEach(fruit => {
@@ -164,7 +183,7 @@ function Canvas() {
 
       if (fruit.bouncing) {
         fruit.animate(ctx, 0, 0);
-        if (fruit.y > canvas.height + 100 || fruit.x < -100 || fruit.x > canvas.width + 100) {
+        if (fruit.y > logicalH + 100 || fruit.x < -100 || fruit.x > logicalW + 100) {
           recycleFruit(fruit);
         }
         return;
@@ -205,7 +224,7 @@ function Canvas() {
       }
 
       // Recycle fruits that fell off screen
-      if (fruit.y >= canvas.height + 100) {
+      if (fruit.y >= logicalH + 100) {
         recycleFruit(fruit);
       }
     });
@@ -318,7 +337,12 @@ function Canvas() {
   };
 
   const gameLoop = useCallback((ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const w = logicalWidthRef.current;
+    const h = logicalHeightRef.current;
+    ctx.clearRect(0, 0, w, h);
 
     const skewer = skewerRef.current;
     if (!skewer) return;
@@ -349,7 +373,7 @@ function Canvas() {
     }
 
     // --- 2. Draw falling fruits (always) ---
-    updateAndDrawFallingFruits(ctx, canvas, skewer);
+    updateAndDrawFallingFruits(ctx, w, h, skewer);
 
     // --- 3. Draw skewer + skewered fruits ---
     skewer.draw(ctx);
@@ -381,7 +405,7 @@ function Canvas() {
 
       if (skewer.y + skewer.height < -50) {
         fruitsRef.current = fruitsRef.current.filter(f => !f.skewered);
-        skewerRef.current = new Skewer(canvas.width / 2, canvas.height - 30);
+        skewerRef.current = new Skewer(w / 2, h - 30);
         gamePhaseRef.current = 'playing';
         phaseTimerRef.current = 0;
         sparklesRef.current = [];
@@ -396,29 +420,58 @@ function Canvas() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    resizeCanvas(canvas);
+    const w = logicalWidthRef.current;
+    const h = logicalHeightRef.current;
 
     // Initialize skewer at bottom center
-    skewerRef.current = new Skewer(canvas.width / 2, canvas.height - 30);
-    mouseXRef.current = canvas.width / 2;
+    skewerRef.current = new Skewer(w / 2, h - 30);
+    mouseXRef.current = w / 2;
 
+    // --- Input handlers (registered on canvas) ---
     const handleMouseMove = (e: MouseEvent) => {
       mouseXRef.current = e.clientX;
     };
 
-    const handleTouchMove = (e: TouchEvent) => {
+    const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length > 0) {
         mouseXRef.current = e.touches[0].clientX;
       }
     };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('touchmove', handleTouchMove);
+    const handleTouchMove = (e: TouchEvent) => {
+      e.preventDefault(); // Prevent scroll / pull-to-refresh
+      if (e.touches.length > 0) {
+        mouseXRef.current = e.touches[0].clientX;
+      }
+    };
+
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('touchstart', handleTouchStart, { passive: true });
+    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+
+    // --- Resize handler ---
+    const handleResize = () => {
+      resizeCanvas(canvas);
+      const newW = logicalWidthRef.current;
+      const newH = logicalHeightRef.current;
+
+      // Reposition skewer to new bottom center (only during playing phase)
+      const skewer = skewerRef.current;
+      if (skewer) {
+        skewer.y = newH - 30;
+        if (gamePhaseRef.current === 'playing') {
+          skewer.x = Math.min(Math.max(skewer.x, 0), newW);
+        }
+        skewer.updateFruitPositions();
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
 
     loadFruits(FRUITS).then(loaded => {
       loadedFruitsRef.current = loaded;
-      createFruitObjects(canvas.width, loaded);
+      createFruitObjects(w, loaded);
 
       const ctx = canvas.getContext('2d');
       if (ctx) {
@@ -429,8 +482,10 @@ function Canvas() {
     });
 
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('touchmove', handleTouchMove);
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('touchstart', handleTouchStart);
+      canvas.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('resize', handleResize);
       if (rAFref.current) {
         window.cancelAnimationFrame(rAFref.current);
       }
