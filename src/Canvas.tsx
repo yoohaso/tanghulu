@@ -20,6 +20,21 @@ const MAX_FRUIT_SIZE = Math.max(...FRUITS.map(f => f.size));
 
 const COLLISION_X_THRESHOLD = 30;
 
+const COATING_DURATION = 60; // frames (~1s)
+const EXIT_DURATION = 90; // frames (~1.5s)
+
+type GamePhase = 'playing' | 'coating' | 'exiting';
+
+interface Sparkle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  size: number;
+}
+
 interface LoadedFruit {
   image: HTMLImageElement;
   width: number;
@@ -88,6 +103,13 @@ function Canvas() {
   const skewerRef = useRef<Skewer | null>(null);
   const mouseXRef = useRef<number>(0);
 
+  // State machine refs
+  const gamePhaseRef = useRef<GamePhase>('playing');
+  const phaseTimerRef = useRef<number>(0);
+  const coatingFrozenXRef = useRef<number>(0);
+  const sparklesRef = useRef<Sparkle[]>([]);
+  const exitStartYRef = useRef<number>(0);
+
   const recycleFruit = (fruit: Fruit) => {
     const pool = availableXRef.current;
     const idx = Math.floor(Math.random() * pool.length);
@@ -129,28 +151,19 @@ function Canvas() {
     if (dx > COLLISION_X_THRESHOLD) return false;
 
     const fruitBottom = fruit.y + fruit.height / 2;
-    // 과일 하단이 꼬치 끝 근처를 지나는 순간에만 충돌 (위에서 아래로 통과하는 짧은 구간)
     return fruitBottom >= skewer.tipY && fruitBottom <= skewer.tipY + 20;
   };
 
-  const gameLoop = useCallback((ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const skewer = skewerRef.current;
-    if (!skewer) return;
-
-    // Smoothly follow mouse X
-    const targetX = mouseXRef.current;
-    skewer.x += (targetX - skewer.x) * 0.12;
-    skewer.updateFruitPositions();
-
-    // Draw falling & bouncing fruits (not skewered)
+  const updateAndDrawFallingFruits = (
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    skewer: Skewer,
+  ) => {
     fruitsRef.current.forEach(fruit => {
       if (fruit.skewered) return;
 
       if (fruit.bouncing) {
         fruit.animate(ctx, 0, 0);
-        // Recycle bouncing fruits that left the screen
         if (fruit.y > canvas.height + 100 || fruit.x < -100 || fruit.x > canvas.width + 100) {
           recycleFruit(fruit);
         }
@@ -160,34 +173,34 @@ function Canvas() {
       // Normal falling fruit
       fruit.animate(ctx, 0.03, 2);
 
-      if (skewer.isFull) {
-        // Skewer is full — bounce off stacked fruits
-        const fruitRadius = Math.max(fruit.width, fruit.height) / 2;
-        for (const stacked of skewer.skeweredFruits) {
-          const stackedRadius = Math.max(stacked.width, stacked.height) / 2;
-          const dx = fruit.x - stacked.x;
-          const dy = fruit.y - stacked.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < fruitRadius + stackedRadius - 10) {
-            fruit.bounce(stacked.x, stacked.y);
-            break;
+      // During playing phase, check collisions
+      if (gamePhaseRef.current === 'playing') {
+        if (skewer.isFull) {
+          const fruitRadius = Math.max(fruit.width, fruit.height) / 2;
+          for (const stacked of skewer.skeweredFruits) {
+            const stackedRadius = Math.max(stacked.width, stacked.height) / 2;
+            const dx = fruit.x - stacked.x;
+            const dy = fruit.y - stacked.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < fruitRadius + stackedRadius - 10) {
+              fruit.bounce(stacked.x, stacked.y);
+              break;
+            }
           }
-        }
-      } else {
-        // Check collision with skewer tip
-        if (checkCollision(fruit, skewer)) {
-          const prevX = fruit.x;
-          skewer.addFruit(fruit);
-          // Spawn a replacement fruit to maintain falling fruit count
-          const pool = availableXRef.current;
-          pool.push(prevX);
-          const idx = Math.floor(Math.random() * pool.length);
-          const newX = pool[idx];
-          pool.splice(idx, 1);
-          const loaded = pickRandom(loadedFruitsRef.current);
-          fruitsRef.current.push(
-            new Fruit(newX, getRandomYAboveViewport(), loaded.width, loaded.height, loaded.image),
-          );
+        } else {
+          if (checkCollision(fruit, skewer)) {
+            const prevX = fruit.x;
+            skewer.addFruit(fruit);
+            const pool = availableXRef.current;
+            pool.push(prevX);
+            const idx = Math.floor(Math.random() * pool.length);
+            const newX = pool[idx];
+            pool.splice(idx, 1);
+            const loaded = pickRandom(loadedFruitsRef.current);
+            fruitsRef.current.push(
+              new Fruit(newX, getRandomYAboveViewport(), loaded.width, loaded.height, loaded.image),
+            );
+          }
         }
       }
 
@@ -196,16 +209,187 @@ function Canvas() {
         recycleFruit(fruit);
       }
     });
+  };
 
-    // Draw skewer
+  const spawnSparkles = (x: number, y: number) => {
+    const sparkles = sparklesRef.current;
+    for (let i = 0; i < 3; i++) {
+      sparkles.push({
+        x: x + (Math.random() - 0.5) * 40,
+        y: y + (Math.random() - 0.5) * 6,
+        vx: (Math.random() - 0.5) * 2,
+        vy: -Math.random() * 2 - 0.5,
+        life: 0,
+        maxLife: 20 + Math.random() * 20,
+        size: 1.5 + Math.random() * 2.5,
+      });
+    }
+  };
+
+  const updateAndDrawSparkles = (ctx: CanvasRenderingContext2D) => {
+    const sparkles = sparklesRef.current;
+    for (let i = sparkles.length - 1; i >= 0; i--) {
+      const s = sparkles[i];
+      s.x += s.vx;
+      s.y += s.vy;
+      s.life++;
+
+      if (s.life >= s.maxLife) {
+        sparkles.splice(i, 1);
+        continue;
+      }
+
+      const alpha = 1 - s.life / s.maxLife;
+      const isGold = Math.random() > 0.4;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = isGold ? '#FFD700' : '#FFFFFF';
+      ctx.beginPath();
+      // Draw a small star shape
+      const cx = s.x;
+      const cy = s.y;
+      const r = s.size;
+      for (let j = 0; j < 4; j++) {
+        const angle = (j * Math.PI) / 2;
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
+      }
+      ctx.arc(cx, cy, r * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  };
+
+  const drawCoatingOverlay = (ctx: CanvasRenderingContext2D, skewer: Skewer, progress: number) => {
+    const baseY = skewer.stackBaseY;
+    const topY = skewer.stackTopY;
+    const coatingLineY = baseY - (baseY - topY) * progress;
+
+    // Draw amber overlay on each coated fruit
+    for (const fruit of skewer.skeweredFruits) {
+      if (fruit.y + fruit.height / 2 < coatingLineY) continue; // above coating line
+      const rx = fruit.width / 2 + 4;
+      const ry = fruit.height / 2 + 4;
+
+      ctx.save();
+      // Amber gloss overlay
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = 'rgba(255, 180, 50, 1)';
+      ctx.beginPath();
+      ctx.ellipse(fruit.x, fruit.y, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // White highlight crescent
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.ellipse(
+        fruit.x - rx * 0.25,
+        fruit.y - ry * 0.2,
+        rx * 0.5,
+        ry * 0.6,
+        -0.3,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Glow line at coating front
+    ctx.save();
+    const glowGrad = ctx.createLinearGradient(
+      skewer.x - 35,
+      coatingLineY,
+      skewer.x + 35,
+      coatingLineY,
+    );
+    glowGrad.addColorStop(0, 'rgba(255, 220, 100, 0)');
+    glowGrad.addColorStop(0.3, 'rgba(255, 220, 100, 0.7)');
+    glowGrad.addColorStop(0.5, 'rgba(255, 255, 200, 0.9)');
+    glowGrad.addColorStop(0.7, 'rgba(255, 220, 100, 0.7)');
+    glowGrad.addColorStop(1, 'rgba(255, 220, 100, 0)');
+    ctx.fillStyle = glowGrad;
+    ctx.fillRect(skewer.x - 35, coatingLineY - 3, 70, 6);
+    ctx.restore();
+
+    // Spawn sparkles at coating front
+    spawnSparkles(skewer.x, coatingLineY);
+  };
+
+  const gameLoop = useCallback((ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const skewer = skewerRef.current;
+    if (!skewer) return;
+
+    const phase = gamePhaseRef.current;
+
+    // --- 1. Update positions (before drawing) ---
+    if (phase === 'playing') {
+      const targetX = mouseXRef.current;
+      skewer.x += (targetX - skewer.x) * 0.12;
+      skewer.updateFruitPositions();
+    } else if (phase === 'coating') {
+      skewer.x = coatingFrozenXRef.current;
+      skewer.updateFruitPositions();
+      phaseTimerRef.current++;
+    } else if (phase === 'exiting') {
+      skewer.x = coatingFrozenXRef.current;
+      phaseTimerRef.current++;
+      const progress = Math.min(phaseTimerRef.current / EXIT_DURATION, 1);
+      const eased = progress * progress;
+      const totalDist = exitStartYRef.current + skewer.height + 100;
+      skewer.y = exitStartYRef.current - totalDist * eased;
+      skewer.updateFruitPositions();
+      // Snap skewered fruits to target immediately (no lerp lag)
+      for (const fruit of skewer.skeweredFruits) {
+        fruit.y = fruit.targetY;
+      }
+    }
+
+    // --- 2. Draw falling fruits (always) ---
+    updateAndDrawFallingFruits(ctx, canvas, skewer);
+
+    // --- 3. Draw skewer + skewered fruits ---
     skewer.draw(ctx);
-
-    // Draw skewered fruits (on top of skewer)
     skewer.skeweredFruits.forEach(fruit => {
       fruit.animate(ctx, 0, 0);
     });
 
+    // --- 4. Phase-specific overlays & transitions ---
+    if (phase === 'playing') {
+      if (skewer.isFull) {
+        gamePhaseRef.current = 'coating';
+        phaseTimerRef.current = 0;
+        coatingFrozenXRef.current = skewer.x;
+        sparklesRef.current = [];
+      }
+    } else if (phase === 'coating') {
+      const progress = Math.min(phaseTimerRef.current / COATING_DURATION, 1);
+      drawCoatingOverlay(ctx, skewer, progress);
+      updateAndDrawSparkles(ctx);
+
+      if (progress >= 1) {
+        gamePhaseRef.current = 'exiting';
+        phaseTimerRef.current = 0;
+        exitStartYRef.current = skewer.y;
+      }
+    } else if (phase === 'exiting') {
+      drawCoatingOverlay(ctx, skewer, 1);
+      updateAndDrawSparkles(ctx);
+
+      if (skewer.y + skewer.height < -50) {
+        fruitsRef.current = fruitsRef.current.filter(f => !f.skewered);
+        skewerRef.current = new Skewer(canvas.width / 2, canvas.height - 30);
+        gamePhaseRef.current = 'playing';
+        phaseTimerRef.current = 0;
+        sparklesRef.current = [];
+      }
+    }
+
     rAFref.current = window.requestAnimationFrame(() => gameLoop(ctx, canvas));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
